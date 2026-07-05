@@ -41,6 +41,8 @@ import { listAvailableModels } from '@/features/models/api/availableModelsApi'
 import { getCurrentUserQuota } from '@/features/users/api/usersApi'
 import { getUsageOverview } from '@/features/usage/api/usageApi'
 import type {
+  ApiKeyCreatePayload,
+  ApiKeyUpdatePayload,
   AvailableModel,
   AvailableModelsResponse,
   ModelRequestEndpoint,
@@ -83,6 +85,18 @@ const apiKeyDescription = ref('VSCode')
 const generatedApiKey = ref<string | null>(null)
 const generatedApiKeyHash = ref<string | null>(null)
 const visibleApiKeyHashes = ref<Set<string>>(new Set())
+const allowedModelsExpanded = ref(false)
+const allowedModelsChecked = ref<Set<string>>(new Set())
+const allowedModelsManual = ref('')
+
+const mergedAllowedModels = computed<string[]>(() => {
+  const manual = allowedModelsManual.value
+    .split('\n')
+    .map((s: string) => s.trim())
+    .filter((s: string) => s !== '')
+  const merged = [...new Set([...allowedModelsChecked.value, ...manual])]
+  return merged.length > 0 ? merged : []
+})
 
 const requestLoadingText = computed(() => t('加载中', 'Loading'))
 
@@ -513,6 +527,9 @@ function openCreateDialog() {
   apiKeyDescription.value = 'VSCode'
   generatedApiKey.value = null
   generatedApiKeyHash.value = null
+  allowedModelsExpanded.value = false
+  allowedModelsChecked.value = new Set()
+  allowedModelsManual.value = ''
   editorVisible.value = true
 }
 
@@ -526,6 +543,12 @@ function editApiKey(row: UserApiKeySummary) {
   apiKeyDescription.value = row.description || 'VSCode'
   generatedApiKey.value = null
   generatedApiKeyHash.value = null
+  const models = row.allowed_models || []
+  const exactModels = models.filter((m: string) => !m.includes('*'))
+  const wildcardModels = models.filter((m: string) => m.includes('*'))
+  allowedModelsChecked.value = new Set(exactModels)
+  allowedModelsManual.value = wildcardModels.join('\n')
+  allowedModelsExpanded.value = models.length > 0
   editorVisible.value = true
 }
 
@@ -567,15 +590,19 @@ async function saveApiKey() {
   }
   isSaving.value = true
   try {
+    const payload: ApiKeyCreatePayload | ApiKeyUpdatePayload = {
+      description,
+      allowed_models: mergedAllowedModels.value.length > 0 ? mergedAllowedModels.value : undefined,
+    }
     if (editingApiKeyHash.value) {
-      await updateApiKey(editingApiKeyHash.value, { description })
+      await updateApiKey(editingApiKeyHash.value, payload)
       message.success(t('API 密钥已更新', 'API key updated'))
     } else {
       if (!canCreateApiKey.value) {
         message.error(t('当前账号额度已用尽，API KEY 已暂停', 'This account has exhausted its quota, so API keys are paused'))
         return
       }
-      const created = await createApiKey({ description })
+      const created = await createApiKey(payload)
       generatedApiKey.value = created.api_key ?? null
       generatedApiKeyHash.value = created.api_key_hash
       message.success(t('API 密钥已创建并同步到 CPA', 'API key created and synced to CPA'))
@@ -802,6 +829,47 @@ onMounted(refresh)
             @keyup.enter="saveApiKey"
           />
         </NFormItem>
+          <NFormItem>
+            <NButton text @click="allowedModelsExpanded = !allowedModelsExpanded" style="padding: 0; font-weight: 600;">
+              {{ allowedModelsExpanded ? '▼' : '▶' }}
+              {{ t('模型限制（可选）', 'Model restriction (optional)') }}
+            </NButton>
+          </NFormItem>
+
+          <div v-if="allowedModelsExpanded" class="model-picker-section">
+            <div class="model-picker-label">
+              {{ t('从可用模型中选择', 'Select from available models') }}
+            </div>
+            <div class="model-checkbox-grid">
+              <NButton
+                v-for="model in (availableModels?.models ?? [])"
+                :key="model.id"
+                :type="allowedModelsChecked.has(model.id) ? 'primary' : 'default'"
+                size="tiny"
+                round
+                @click="
+                  allowedModelsChecked.has(model.id)
+                    ? allowedModelsChecked.delete(model.id)
+                    : allowedModelsChecked.add(model.id);
+                  allowedModelsChecked = new Set(allowedModelsChecked)
+                "
+              >
+                {{ model.id }}
+              </NButton>
+            </div>
+            <div class="model-picker-label" style="margin-top: 12px;">
+              {{ t('或输入通配符模式（每行一个）', 'Or enter wildcard patterns (one per line)') }}
+            </div>
+            <NInput
+              v-model:value="allowedModelsManual"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              :placeholder="t('例如: gemini-*\nclaude-sonnet-*\n*-preview', 'Example: gemini-*\nclaude-sonnet-*\n*-preview')"
+            />
+            <div v-if="mergedAllowedModels.length > 0" class="model-chips-preview">
+              <span v-for="model in mergedAllowedModels" :key="model" class="model-tag">{{ model }}</span>
+            </div>
+          </div>
         <div class="modal-actions">
           <NButton secondary :disabled="isSaving" @click="editorVisible = false">{{ t('取消', 'Cancel') }}</NButton>
           <NButton
@@ -1301,5 +1369,32 @@ onMounted(refresh)
 .model-tag-more {
   background: var(--cpa-surface-muted);
   color: var(--cpa-text-muted);
+}
+
+.model-picker-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cpa-border);
+  border-radius: var(--cpa-radius);
+  background: var(--cpa-surface-muted);
+}
+
+.model-picker-label {
+  color: var(--cpa-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.model-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-chips-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 </style>
