@@ -531,6 +531,9 @@ function openCreateDialog() {
   allowedModelsChecked.value = new Set()
   allowedModelsManual.value = ''
   editorVisible.value = true
+  if (!availableModels.value) {
+    void loadAvailableModelsForTest()
+  }
 }
 
 function closeGeneratedApiKey() {
@@ -550,6 +553,9 @@ function editApiKey(row: UserApiKeySummary) {
   allowedModelsManual.value = wildcardModels.join('\n')
   allowedModelsExpanded.value = models.length > 0
   editorVisible.value = true
+  if (!availableModels.value) {
+    void loadAvailableModelsForTest()
+  }
 }
 
 async function refresh() {

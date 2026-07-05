@@ -316,7 +316,7 @@ func (a *App) restoreQuotaPausedUserIfAvailable(ctx context.Context, userID int)
 		if key.APIKey == nil {
 			continue
 		}
-		if err := a.addRemoteAPIKey(ctx, *key.APIKey, nil); err != nil {
+		if err := a.addRemoteAPIKey(ctx, *key.APIKey, key.AllowedModels); err != nil {
 			for _, hash := range restored {
 				_ = a.removeRemoteAPIKeyHash(ctx, hash)
 			}

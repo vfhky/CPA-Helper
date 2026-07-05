@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -845,7 +846,9 @@ func (a *App) removeRemoteAPIKeyHash(ctx context.Context, apiKeyHash string) err
 		}
 	}
 	if len(filteredEntries) < len(entries) {
-		_ = a.putRemoteAPIKeyEntries(syncCtx, cfg, filteredEntries)
+		if err := a.putRemoteAPIKeyEntries(syncCtx, cfg, filteredEntries); err != nil {
+			log.Printf("failed to clean up api-key-entries after delete: %v", err)
+		}
 	}
 	return nil
 }

@@ -519,7 +519,7 @@ func (a *App) enableUser(ctx context.Context, id int) error {
 		if key.APIKey == nil {
 			continue
 		}
-		if err := a.addRemoteAPIKey(ctx, *key.APIKey, nil); err != nil {
+		if err := a.addRemoteAPIKey(ctx, *key.APIKey, key.AllowedModels); err != nil {
 			for _, hash := range restored {
 				_ = a.removeRemoteAPIKeyHash(ctx, hash)
 			}
@@ -647,7 +647,16 @@ func (a *App) updateCurrentUserAPIKey(ctx context.Context, user *AuthUser, apiKe
 	if description == "" {
 		return UserApiKeySummary{}, validationError("API KEY 描述不能为空")
 	}
-	result, err := a.db.ExecContext(ctx, `UPDATE user_api_keys SET description = ?, allowed_models = ?, updated_at = ? WHERE user_id = ? AND api_key_hash = ?`, description, encodeAllowedModels(allowedModels), dbTime(time.Now()), user.ID, apiKeyHash)
+
+	// Fetch old state for sync comparison
+	oldKey, oldErr := a.getAPIKey(ctx, apiKeyHash)
+	var oldAllowedModels []string
+	if oldErr == nil {
+		oldAllowedModels = oldKey.AllowedModels
+	}
+
+	encoded := encodeAllowedModels(allowedModels)
+	result, err := a.db.ExecContext(ctx, `UPDATE user_api_keys SET description = ?, allowed_models = ?, updated_at = ? WHERE user_id = ? AND api_key_hash = ?`, description, encoded, dbTime(time.Now()), user.ID, apiKeyHash)
 	if err != nil {
 		return UserApiKeySummary{}, err
 	}
@@ -655,6 +664,13 @@ func (a *App) updateCurrentUserAPIKey(ctx context.Context, user *AuthUser, apiKe
 	if affected == 0 {
 		return UserApiKeySummary{}, notFoundError("API KEY 不存在")
 	}
+
+	// Re-sync to CLIProxyAPI if allowed_models changed
+	if !stringSlicesEqual(oldAllowedModels, allowedModels) && oldErr == nil && oldKey.APIKey != nil {
+		_ = a.removeRemoteAPIKeyHash(ctx, apiKeyHash)
+		_ = a.addRemoteAPIKey(ctx, *oldKey.APIKey, allowedModels)
+	}
+
 	_, _ = a.db.ExecContext(ctx, `UPDATE users SET updated_at = ? WHERE id = ?`, dbTime(time.Now()), user.ID)
 	summary, err := a.keySummaryByHash(ctx, apiKeyHash, nil)
 	if err != nil {
@@ -823,7 +839,7 @@ func (a *App) ensureUsernameAvailable(ctx context.Context, username string, exce
 }
 
 func (a *App) userAPIKeys(ctx context.Context, userID int) ([]UserAPIKey, error) {
-	rows, err := a.db.QueryContext(ctx, `SELECT api_key_hash, user_id, api_key, description, CAST(created_at AS TEXT), CAST(updated_at AS TEXT) FROM user_api_keys WHERE user_id = ? ORDER BY created_at, api_key_hash`, userID)
+	rows, err := a.db.QueryContext(ctx, `SELECT api_key_hash, user_id, api_key, description, allowed_models, CAST(created_at AS TEXT), CAST(updated_at AS TEXT) FROM user_api_keys WHERE user_id = ? ORDER BY created_at, api_key_hash`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -832,7 +848,7 @@ func (a *App) userAPIKeys(ctx context.Context, userID int) ([]UserAPIKey, error)
 }
 
 func (a *App) getAPIKey(ctx context.Context, apiKeyHash string) (UserAPIKey, error) {
-	rows, err := a.db.QueryContext(ctx, `SELECT api_key_hash, user_id, api_key, description, CAST(created_at AS TEXT), CAST(updated_at AS TEXT) FROM user_api_keys WHERE api_key_hash = ?`, apiKeyHash)
+	rows, err := a.db.QueryContext(ctx, `SELECT api_key_hash, user_id, api_key, description, allowed_models, CAST(created_at AS TEXT), CAST(updated_at AS TEXT) FROM user_api_keys WHERE api_key_hash = ?`, apiKeyHash)
 	if err != nil {
 		return UserAPIKey{}, err
 	}
@@ -851,11 +867,12 @@ func scanAPIKeys(rows *sql.Rows) ([]UserAPIKey, error) {
 	var keys []UserAPIKey
 	for rows.Next() {
 		var key UserAPIKey
-		var apiKey, createdAt, updatedAt sql.NullString
-		if err := rows.Scan(&key.APIKeyHash, &key.UserID, &apiKey, &key.Description, &createdAt, &updatedAt); err != nil {
+		var apiKey, createdAt, updatedAt, rawAllowedModels sql.NullString
+		if err := rows.Scan(&key.APIKeyHash, &key.UserID, &apiKey, &key.Description, &rawAllowedModels, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		key.APIKey = nullableString(apiKey)
+		key.AllowedModels = decodeAllowedModels(rawAllowedModels.String)
 		key.CreatedAt = timePtr(createdAt)
 		key.UpdatedAt = timePtr(updatedAt)
 		keys = append(keys, key)
@@ -1032,6 +1049,18 @@ func appendUniqueString(items *[]string, seen map[string]bool, value *string) {
 	}
 	seen[normalized] = true
 	*items = append(*items, normalized)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func displayUserName(user UserRecord) string {
