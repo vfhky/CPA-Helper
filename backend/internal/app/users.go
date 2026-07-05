@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
@@ -30,7 +31,8 @@ type userAPIKeyBindPayload struct {
 }
 
 type apiKeyPayload struct {
-	Description string `json:"description"`
+	Description   string   `json:"description"`
+	AllowedModels []string `json:"allowed_models"`
 }
 
 type UserRecord struct {
@@ -55,19 +57,21 @@ type UserRecord struct {
 }
 
 type UserAPIKey struct {
-	APIKeyHash  string
-	UserID      int
-	APIKey      *string
-	Description string
-	CreatedAt   *time.Time
-	UpdatedAt   *time.Time
+	APIKeyHash    string
+	UserID        int
+	APIKey        *string
+	Description   string
+	AllowedModels []string
+	CreatedAt     *time.Time
+	UpdatedAt     *time.Time
 }
 
 type UserApiKeySummary struct {
 	APIKeyHash            string     `json:"api_key_hash"`
 	APIKey                *string    `json:"api_key"`
-	Description           string     `json:"description"`
-	UserID                *int       `json:"user_id"`
+	Description           string      `json:"description"`
+	AllowedModels         []string    `json:"allowed_models"`
+	UserID                *int        `json:"user_id"`
 	UserName              *string    `json:"user_name"`
 	CreatedAt             *time.Time `json:"created_at"`
 	UpdatedAt             *time.Time `json:"updated_at"`
@@ -92,6 +96,30 @@ type UserApiKeySummary struct {
 	Providers             []string   `json:"providers"`
 	Models                []string   `json:"models"`
 }
+
+func encodeAllowedModels(models []string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(models)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func decodeAllowedModels(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var models []string
+	if err := json.Unmarshal([]byte(raw), &models); err != nil {
+		return nil
+	}
+	return models
+}
+
 
 type UserSummaryResponse struct {
 	ID                    int                     `json:"id"`
@@ -614,12 +642,12 @@ func (a *App) createGeneratedAPIKeyForUser(ctx context.Context, userID int, user
 	return summary, nil
 }
 
-func (a *App) updateCurrentUserAPIKey(ctx context.Context, user *AuthUser, apiKeyHash, description string) (UserApiKeySummary, error) {
+func (a *App) updateCurrentUserAPIKey(ctx context.Context, user *AuthUser, apiKeyHash, description string, allowedModels []string) (UserApiKeySummary, error) {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return UserApiKeySummary{}, validationError("API KEY 描述不能为空")
 	}
-	result, err := a.db.ExecContext(ctx, `UPDATE user_api_keys SET description = ?, updated_at = ? WHERE user_id = ? AND api_key_hash = ?`, description, dbTime(time.Now()), user.ID, apiKeyHash)
+	result, err := a.db.ExecContext(ctx, `UPDATE user_api_keys SET description = ?, allowed_models = ?, updated_at = ? WHERE user_id = ? AND api_key_hash = ?`, description, encodeAllowedModels(allowedModels), dbTime(time.Now()), user.ID, apiKeyHash)
 	if err != nil {
 		return UserApiKeySummary{}, err
 	}
@@ -649,14 +677,14 @@ func (a *App) deleteCurrentUserAPIKey(ctx context.Context, user *AuthUser, apiKe
 	return a.removeRemoteAPIKeyHash(ctx, apiKeyHash)
 }
 
-func (a *App) upsertUserAPIKey(ctx context.Context, userID int, apiKeyHash, apiKey, description string) error {
+func (a *App) upsertUserAPIKey(ctx context.Context, userID int, apiKeyHash, apiKey, description string, allowedModels []string) error {
 	now := dbTime(time.Now())
 	_, err := a.db.ExecContext(ctx, `
-		INSERT INTO user_api_keys (api_key_hash, user_id, api_key, description, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO user_api_keys (api_key_hash, user_id, api_key, description, allowed_models, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(api_key_hash) DO UPDATE SET user_id = excluded.user_id,
-			api_key = excluded.api_key, description = excluded.description, updated_at = excluded.updated_at
-	`, apiKeyHash, userID, apiKey, description, now, now)
+			api_key = excluded.api_key, description = excluded.description, allowed_models = excluded.allowed_models, updated_at = excluded.updated_at
+	`, apiKeyHash, userID, apiKey, description, encodeAllowedModels(allowedModels), now, now)
 	if err != nil {
 		return err
 	}
@@ -837,7 +865,7 @@ func scanAPIKeys(rows *sql.Rows) ([]UserAPIKey, error) {
 
 func (a *App) keySummaries(ctx context.Context) ([]UserApiKeySummary, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT k.api_key_hash, k.user_id, k.api_key, k.description, CAST(k.created_at AS TEXT), CAST(k.updated_at AS TEXT),
+		SELECT k.api_key_hash, k.user_id, k.api_key, k.description, k.allowed_models, CAST(k.created_at AS TEXT), CAST(k.updated_at AS TEXT),
 		       u.nickname, u.username
 		FROM user_api_keys k
 		LEFT JOIN users u ON u.id = k.user_id
@@ -850,11 +878,13 @@ func (a *App) keySummaries(ctx context.Context) ([]UserApiKeySummary, error) {
 	for rows.Next() {
 		var summary UserApiKeySummary
 		var apiKey, createdAt, updatedAt, nickname, username sql.NullString
+		var rawAllowedModels sql.NullString
 		var userID int
-		if err := rows.Scan(&summary.APIKeyHash, &userID, &apiKey, &summary.Description, &createdAt, &updatedAt, &nickname, &username); err != nil {
+		if err := rows.Scan(&summary.APIKeyHash, &userID, &apiKey, &summary.Description, &rawAllowedModels, &createdAt, &updatedAt, &nickname, &username); err != nil {
 			return nil, err
 		}
 		summary.APIKey = nullableString(apiKey)
+		summary.AllowedModels = decodeAllowedModels(rawAllowedModels.String)
 		summary.CreatedAt = timePtr(createdAt)
 		summary.UpdatedAt = timePtr(updatedAt)
 		summary.UserID = &userID
