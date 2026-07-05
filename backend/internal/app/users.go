@@ -310,7 +310,7 @@ func (a *App) handleCurrentUserAPIKeys(w http.ResponseWriter, r *http.Request) e
 		if err := decodeJSON(r, &payload); err != nil {
 			return err
 		}
-		summary, err := a.createGeneratedAPIKeyForUser(r.Context(), user.ID, user.Username, payload.Description)
+		summary, err := a.createGeneratedAPIKeyForUser(r.Context(), user.ID, user.Username, payload.Description, payload.AllowedModels)
 		if err != nil {
 			return err
 		}
@@ -336,7 +336,7 @@ func (a *App) handleCurrentUserAPIKeyByHash(w http.ResponseWriter, r *http.Reque
 		if err := decodeJSON(r, &payload); err != nil {
 			return err
 		}
-		summary, err := a.updateCurrentUserAPIKey(r.Context(), user, apiKeyHash, payload.Description)
+		summary, err := a.updateCurrentUserAPIKey(r.Context(), user, apiKeyHash, payload.Description, payload.AllowedModels)
 		if err != nil {
 			return err
 		}
@@ -519,7 +519,7 @@ func (a *App) enableUser(ctx context.Context, id int) error {
 		if key.APIKey == nil {
 			continue
 		}
-		if err := a.addRemoteAPIKey(ctx, *key.APIKey); err != nil {
+		if err := a.addRemoteAPIKey(ctx, *key.APIKey, nil); err != nil {
 			for _, hash := range restored {
 				_ = a.removeRemoteAPIKeyHash(ctx, hash)
 			}
@@ -573,7 +573,7 @@ func (a *App) bindUserAPIKey(ctx context.Context, userID int, payload userAPIKey
 	if apiKey == nil {
 		return UserApiKeySummary{}, notFoundError("未找到完整 API KEY，请粘贴原始 API KEY")
 	}
-	if err := a.upsertUserAPIKey(ctx, user.ID, apiKeyHash, *apiKey, description); err != nil {
+	if err := a.upsertUserAPIKey(ctx, user.ID, apiKeyHash, *apiKey, description, nil); err != nil {
 		return UserApiKeySummary{}, err
 	}
 	return a.keySummaryByHash(ctx, apiKeyHash, nil)
@@ -610,7 +610,7 @@ func (a *App) currentUserAPIKeys(ctx context.Context, user *AuthUser) ([]UserApi
 	return result, nil
 }
 
-func (a *App) createGeneratedAPIKeyForUser(ctx context.Context, userID int, username, description string) (UserApiKeySummary, error) {
+func (a *App) createGeneratedAPIKeyForUser(ctx context.Context, userID int, username, description string, allowedModels []string) (UserApiKeySummary, error) {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return UserApiKeySummary{}, validationError("API KEY 描述不能为空")
@@ -626,11 +626,11 @@ func (a *App) createGeneratedAPIKeyForUser(ctx context.Context, userID int, user
 	if err != nil {
 		return UserApiKeySummary{}, err
 	}
-	if err := a.addRemoteAPIKey(ctx, apiKey); err != nil {
+	if err := a.addRemoteAPIKey(ctx, apiKey, allowedModels); err != nil {
 		return UserApiKeySummary{}, err
 	}
 	apiKeyHash := hashAPIKey(apiKey)
-	if err := a.upsertUserAPIKey(ctx, user.ID, apiKeyHash, apiKey, description); err != nil {
+	if err := a.upsertUserAPIKey(ctx, user.ID, apiKeyHash, apiKey, description, allowedModels); err != nil {
 		_ = a.removeRemoteAPIKeyHash(ctx, apiKeyHash)
 		return UserApiKeySummary{}, err
 	}
