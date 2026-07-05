@@ -411,8 +411,8 @@ services:
 Copy Telegram credentials from cliproxyapi-watcher:
 
 ```
-WATCHER_TG_BOT_TOKEN=7096171381:AAE4oo3v7c563xjeQ-WQqCpCcbRS6OudCT0
-WATCHER_TG_CHANNEL=6295766976
+WATCHER_TG_BOT_TOKEN=<your-telegram-bot-token>
+WATCHER_TG_CHANNEL=<your-telegram-chat-id>
 ```
 
 - [ ] **Step 4: Commit**
