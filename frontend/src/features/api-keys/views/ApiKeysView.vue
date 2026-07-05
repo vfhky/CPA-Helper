@@ -596,9 +596,10 @@ async function saveApiKey() {
   }
   isSaving.value = true
   try {
+    const allowedModels = mergedAllowedModels.value.length > 0 ? mergedAllowedModels.value : null
     const payload: ApiKeyCreatePayload | ApiKeyUpdatePayload = {
       description,
-      allowed_models: mergedAllowedModels.value.length > 0 ? mergedAllowedModels.value : undefined,
+      ...(allowedModels ? { allowed_models: allowedModels } : {}),
     }
     if (editingApiKeyHash.value) {
       await updateApiKey(editingApiKeyHash.value, payload)
