@@ -757,7 +757,7 @@ func (a *App) collectorState(ctx context.Context) (collectorState, error) {
 	return state, nil
 }
 
-func (a *App) addRemoteAPIKey(ctx context.Context, apiKey string) error {
+func (a *App) addRemoteAPIKey(ctx context.Context, apiKey string, allowedModels []string) error {
 	cfg, err := a.loadConfig(ctx)
 	if err != nil {
 		return err
@@ -767,24 +767,42 @@ func (a *App) addRemoteAPIKey(ctx context.Context, apiKey string) error {
 	}
 	syncCtx, cancel := context.WithTimeout(ctx, apiKeySyncTimeout)
 	defer cancel()
-	unsupported, err := a.patchRemoteAPIKey(syncCtx, cfg, apiKey)
-	if err != nil {
-		return err
-	}
-	if !unsupported {
-		return nil
-	}
-	keys, err := a.remoteAPIKeys(syncCtx, cfg)
-	if err != nil {
-		return err
-	}
-	for _, existing := range keys {
-		if existing == apiKey {
+
+	if len(allowedModels) == 0 {
+		// No restriction — use existing api-keys sync path
+		unsupported, err := a.patchRemoteAPIKey(syncCtx, cfg, apiKey)
+		if err != nil {
+			return err
+		}
+		if !unsupported {
 			return nil
 		}
+		keys, err := a.remoteAPIKeys(syncCtx, cfg)
+		if err != nil {
+			return err
+		}
+		for _, existing := range keys {
+			if existing == apiKey {
+				return nil
+			}
+		}
+		keys = append(keys, apiKey)
+		return a.putRemoteAPIKeys(syncCtx, cfg, keys)
 	}
-	keys = append(keys, apiKey)
-	return a.putRemoteAPIKeys(syncCtx, cfg, keys)
+
+	// Has model restrictions — use api-key-entries sync path
+	entries, err := a.remoteAPIKeyEntries(syncCtx, cfg)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if entries[i].Key == apiKey {
+			entries[i].AllowedModels = allowedModels
+			return a.putRemoteAPIKeyEntries(syncCtx, cfg, entries)
+		}
+	}
+	entries = append(entries, cliProxyAPIKeyEntry{Key: apiKey, AllowedModels: allowedModels})
+	return a.putRemoteAPIKeyEntries(syncCtx, cfg, entries)
 }
 
 func (a *App) removeRemoteAPIKeyHash(ctx context.Context, apiKeyHash string) error {
@@ -797,23 +815,39 @@ func (a *App) removeRemoteAPIKeyHash(ctx context.Context, apiKeyHash string) err
 	}
 	syncCtx, cancel := context.WithTimeout(ctx, apiKeySyncTimeout)
 	defer cancel()
+
+	// Remove from api-keys (existing path)
 	keys, err := a.remoteAPIKeys(syncCtx, cfg)
 	if err != nil {
 		return err
 	}
-	next := make([]string, 0, len(keys))
-	changed := false
-	for _, key := range keys {
-		if hashAPIKey(key) == apiKeyHash {
-			changed = true
-			continue
+	filtered := make([]string, 0, len(keys))
+	for _, existing := range keys {
+		if hashAPIKey(existing) != apiKeyHash {
+			filtered = append(filtered, existing)
 		}
-		next = append(next, key)
 	}
-	if !changed {
-		return nil
+	if len(filtered) < len(keys) {
+		if err := a.putRemoteAPIKeys(syncCtx, cfg, filtered); err != nil {
+			return err
+		}
 	}
-	return a.putRemoteAPIKeys(syncCtx, cfg, next)
+
+	// Also remove from api-key-entries (best-effort, ignore 404)
+	entries, err := a.remoteAPIKeyEntries(syncCtx, cfg)
+	if err != nil {
+		return nil // endpoint not available (older CLIProxyAPI) — ignore
+	}
+	filteredEntries := make([]cliProxyAPIKeyEntry, 0, len(entries))
+	for _, entry := range entries {
+		if hashAPIKey(entry.Key) != apiKeyHash {
+			filteredEntries = append(filteredEntries, entry)
+		}
+	}
+	if len(filteredEntries) < len(entries) {
+		_ = a.putRemoteAPIKeyEntries(syncCtx, cfg, filteredEntries)
+	}
+	return nil
 }
 
 func (a *App) remoteAPIKeys(ctx context.Context, cfg AppConfig) ([]string, error) {
@@ -886,4 +920,58 @@ func parseStringList(payload []byte) []string {
 	}
 	walk(raw)
 	return result
+}
+
+type cliProxyAPIKeyEntry struct {
+	Key           string   `json:"key"`
+	AllowedModels []string `json:"allowed-models,omitempty"`
+}
+
+func (a *App) remoteAPIKeyEntries(ctx context.Context, cfg AppConfig) ([]cliProxyAPIKeyEntry, error) {
+	response, payload, err := doJSON(ctx, httpClient(apiKeySyncTimeout), http.MethodGet,
+		makeURL(cfg.Collector.CLIProxyURL, "/v0/management/api-key-entries", nil),
+		managementHeaders(cfg.Collector.ManagementKey), nil)
+	if err != nil {
+		return nil, remoteAPIKeyError("读取 CPA API KEY 模型限制", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, validationError(fmt.Sprintf("读取 CPA API KEY 模型限制失败：HTTP %d", response.StatusCode))
+	}
+	var result struct {
+		Entries []cliProxyAPIKeyEntry `json:"api-key-entries"`
+	}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, remoteAPIKeyError("解析 CPA API KEY 模型限制", err)
+	}
+	return result.Entries, nil
+}
+
+func (a *App) putRemoteAPIKeyEntries(ctx context.Context, cfg AppConfig, entries []cliProxyAPIKeyEntry) error {
+	body := map[string]interface{}{"api-key-entries": entries}
+	response, _, err := doJSON(ctx, httpClient(apiKeySyncTimeout), http.MethodPut,
+		makeURL(cfg.Collector.CLIProxyURL, "/v0/management/api-key-entries", nil),
+		managementHeaders(cfg.Collector.ManagementKey), body)
+	if err != nil {
+		return remoteAPIKeyError("写入 CPA API KEY 模型限制", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return validationError(fmt.Sprintf("写入 CPA API KEY 模型限制失败：HTTP %d", response.StatusCode))
+	}
+	return nil
+}
+
+func (a *App) deleteRemoteAPIKeyEntry(ctx context.Context, cfg AppConfig, key string) (bool, error) {
+	response, _, err := doJSON(ctx, httpClient(apiKeySyncTimeout), http.MethodDelete,
+		makeURL(cfg.Collector.CLIProxyURL, "/v0/management/api-key-entries", url.Values{"value": {key}}),
+		managementHeaders(cfg.Collector.ManagementKey), nil)
+	if err != nil {
+		return false, remoteAPIKeyError("删除 CPA API KEY 模型限制", err)
+	}
+	if response.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false, validationError(fmt.Sprintf("删除 CPA API KEY 模型限制失败：HTTP %d", response.StatusCode))
+	}
+	return true, nil
 }

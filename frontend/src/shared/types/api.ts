@@ -474,6 +474,7 @@ export interface LiteLLMProxySettingsPayload {
 export interface UserApiKeySummary {
   api_key_hash: string
   api_key: string | null
+  allowed_models: string[]
   description: string
   user_id: number | null
   user_name: string | null
@@ -617,8 +618,10 @@ export interface UserApiKeyBindPayload {
 
 export interface ApiKeyCreatePayload {
   description: string
+  allowed_models?: string[]
 }
 
 export interface ApiKeyUpdatePayload {
   description: string
+  allowed_models?: string[]
 }
