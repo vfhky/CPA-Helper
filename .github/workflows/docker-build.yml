@@ -27,7 +27,7 @@ jobs:
             🚀 *CPA-Helper Docker Build Started*
             🌿 `feat/api-key-entries`
             🏷 `${{ github.sha }}`
-            📝 ${{ github.event.head_commit.message || 'manual trigger' }}
+            📝 ${{ github.event.head_commit.message || github.event.commits[0].message || 'manual trigger' }}
             🔗 [查看详情](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   build:
@@ -37,6 +37,7 @@ jobs:
       matrix:
         platform:
           - linux/amd64
+          - linux/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,6 +60,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
       - name: Login to Tencent TCR
         uses: docker/login-action@v3
         with:
@@ -72,19 +80,90 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.sha }}
+            COMMIT=${{ steps.meta.outputs.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
           tags: |
-            docker.io/vfhky/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}
-            docker.io/vfhky/${{ env.IMAGE_NAME }}:latest
-            ccr.ccs.tencentyun.com/typecodes/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}
-            ccr.ccs.tencentyun.com/typecodes/${{ env.IMAGE_NAME }}:latest
+            ghcr.io/vfhky/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+            docker.io/vfhky/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+            ccr.ccs.tencentyun.com/typecodes/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+
+  manifest:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate metadata
+        id: meta
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Login to Tencent TCR
+        uses: docker/login-action@v3
+        with:
+          registry: ccr.ccs.tencentyun.com
+          username: ${{ secrets.TENCENT_TCR_USERNAME }}
+          password: ${{ secrets.TENCENT_TCR_PASSWORD }}
+
+      - name: Create and push multi-arch manifests
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          DATE="${{ steps.meta.outputs.date }}"
+          for REG in \
+            "ghcr.io/vfhky/${IMAGE_NAME}" \
+            "docker.io/vfhky/${IMAGE_NAME}" \
+            "ccr.ccs.tencentyun.com/typecodes/${IMAGE_NAME}"
+          do
+            docker buildx imagetools create \
+              --tag "${REG}:latest" \
+              --tag "${REG}:${SHA}" \
+              --tag "${REG}:${DATE}" \
+              "${REG}:${SHA}-amd64" \
+              "${REG}:${SHA}-arm64"
+          done
+
+      - name: Cleanup temporary platform tags
+        if: always()
+        run: |
+          # 删除临时 amd64/arm64 标签，保留 manifest 标签
+          echo "Temporary platform tags can be cleaned manually if needed."
 
   notify:
     runs-on: ubuntu-latest
-    needs: build
+    needs: manifest
     if: always()
     steps:
+      - name: Calculate duration
+        id: duration
+        continue-on-error: true
+        run: |
+          START_TS=$(date -d "$(curl -s -H 'Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+            -H 'Accept: application/vnd.github+json' \
+            '${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin)["created_at"])')" +%s)
+          NOW=$(date +%s)
+          ELAPSED=$((NOW - START_TS))
+          echo "elapsed=${ELAPSED}s (~$((ELAPSED / 60))m $((ELAPSED % 60))s)" >> $GITHUB_OUTPUT
+
       - name: Notify build success
-        if: needs.build.result == 'success'
+        if: needs.manifest.result == 'success'
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -94,10 +173,12 @@ jobs:
             ✅ *CPA-Helper Docker Build Success*
             🌿 `feat/api-key-entries`
             🏷 `latest` `${{ github.sha }}`
+            ⏱ ${{ steps.duration.outputs.elapsed || 'N/A' }}
+            📝 ${{ github.event.head_commit.message || github.event.commits[0].message || 'manual trigger' }}
             🔗 [查看详情](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
       - name: Notify build failure
-        if: needs.build.result == 'failure'
+        if: needs.manifest.result == 'failure'
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -107,4 +188,6 @@ jobs:
             ❌ *CPA-Helper Docker Build Failed*
             🌿 `feat/api-key-entries`
             🏷 `${{ github.sha }}`
+            ⏱ ${{ steps.duration.outputs.elapsed || 'N/A' }}
+            📝 ${{ github.event.head_commit.message || github.event.commits[0].message || 'manual trigger' }}
             🔗 [查看日志](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
