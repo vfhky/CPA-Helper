@@ -661,6 +661,28 @@ const columns = computed<DataTableColumns<UserApiKeySummary>>(() => [
     render: (row) => row.description || '-',
   },
   {
+    title: t('模型限制', 'Model restriction'),
+    key: 'allowed_models',
+    width: 260,
+    render: (row: UserApiKeySummary) => {
+      const models = row.allowed_models
+      if (!models || models.length === 0) {
+        return h('span', { class: 'model-restriction-none' }, '—')
+      }
+      return h(
+        'div',
+        { class: 'model-tags' },
+        models.slice(0, 3).map((m: string) =>
+          h('span', { class: 'model-tag' }, m)
+        ).concat(
+          models.length > 3
+            ? [h('span', { class: 'model-tag model-tag-more' }, `+${models.length - 3}`)]
+            : []
+        )
+      )
+    },
+  },
+  {
     title: t('创建时间', 'Created at'),
     key: 'created_at',
     width: 180,
@@ -1251,5 +1273,33 @@ onMounted(refresh)
   .api-key-metrics {
     grid-template-columns: 1fr;
   }
+}
+
+.model-restriction-none {
+  color: var(--cpa-text-muted);
+  font-size: 13px;
+}
+
+.model-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.model-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cpa-primary) 12%, transparent);
+  color: var(--cpa-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.model-tag-more {
+  background: var(--cpa-surface-muted);
+  color: var(--cpa-text-muted);
 }
 </style>
