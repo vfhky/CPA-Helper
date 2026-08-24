@@ -9,6 +9,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upModelPriceRequestUSD, nil)
+	registerThisGoMigration()
 }
 
 func upModelPriceRequestUSD(ctx context.Context, db *sql.DB) (err error) {

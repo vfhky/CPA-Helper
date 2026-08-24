@@ -9,6 +9,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upUserQuotaLifetimeNames, nil)
+	registerThisGoMigration()
 }
 
 func upUserQuotaLifetimeNames(ctx context.Context, db *sql.DB) (err error) {

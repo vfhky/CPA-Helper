@@ -16,6 +16,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upNormalizeCurrentSchema, nil)
+	registerThisGoMigration()
 }
 
 type oldSettingsAccount struct {

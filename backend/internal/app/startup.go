@@ -61,21 +61,21 @@ func Migrate(ctx context.Context) (MigrationReport, error) {
 
 	before, err := currentMigrationVersion(ctx, db)
 	if err != nil && !errors.Is(err, ErrDatabaseNotInitialized) {
-		return MigrationReport{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion}, err
+		return MigrationReport{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion()}, err
 	}
 	app := &App{db: db}
 	if err := app.runMigrations(ctx); err != nil {
-		return MigrationReport{DBPath: paths.DBPath, PreviousVersion: before, TargetVersion: backendMigrations.LatestVersion}, err
+		return MigrationReport{DBPath: paths.DBPath, PreviousVersion: before, TargetVersion: backendMigrations.LatestVersion()}, err
 	}
 	after, err := currentMigrationVersion(ctx, db)
 	if err != nil {
-		return MigrationReport{DBPath: paths.DBPath, PreviousVersion: before, TargetVersion: backendMigrations.LatestVersion}, err
+		return MigrationReport{DBPath: paths.DBPath, PreviousVersion: before, TargetVersion: backendMigrations.LatestVersion()}, err
 	}
 	return MigrationReport{
 		DBPath:          paths.DBPath,
 		PreviousVersion: before,
 		CurrentVersion:  after,
-		TargetVersion:   backendMigrations.LatestVersion,
+		TargetVersion:   backendMigrations.LatestVersion(),
 	}, nil
 }
 
@@ -145,11 +145,11 @@ func sqliteDSN(dbPath string, readOnly bool) string {
 func checkStartupPaths(ctx context.Context, paths RuntimePaths) (StartupCheck, error) {
 	db, err := openRuntimeDB(paths, true)
 	if err != nil {
-		return StartupCheck{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion}, err
+		return StartupCheck{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion()}, err
 	}
 	defer db.Close()
 	if err := db.PingContext(ctx); err != nil {
-		return StartupCheck{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion}, err
+		return StartupCheck{DBPath: paths.DBPath, TargetVersion: backendMigrations.LatestVersion()}, err
 	}
 	return checkDatabaseReady(ctx, db, paths.DBPath)
 }
@@ -159,16 +159,16 @@ func checkDatabaseReady(ctx context.Context, db *sql.DB, dbPath string) (Startup
 	report := StartupCheck{
 		DBPath:         dbPath,
 		CurrentVersion: current,
-		TargetVersion:  backendMigrations.LatestVersion,
+		TargetVersion:  backendMigrations.LatestVersion(),
 	}
 	if err != nil {
 		return report, err
 	}
-	if current < backendMigrations.LatestVersion {
-		return report, fmt.Errorf("%w: current version %d, target version %d; run `cpa-helper migrate`", ErrDatabaseNeedsMigration, current, backendMigrations.LatestVersion)
+	if current < backendMigrations.LatestVersion() {
+		return report, fmt.Errorf("%w: current version %d, target version %d; run `cpa-helper migrate`", ErrDatabaseNeedsMigration, current, backendMigrations.LatestVersion())
 	}
-	if current > backendMigrations.LatestVersion {
-		return report, fmt.Errorf("%w: current version %d, target version %d", ErrDatabaseTooNew, current, backendMigrations.LatestVersion)
+	if current > backendMigrations.LatestVersion() {
+		return report, fmt.Errorf("%w: current version %d, target version %d", ErrDatabaseTooNew, current, backendMigrations.LatestVersion())
 	}
 	if err := requireSchemaShape(ctx, db); err != nil {
 		return report, err

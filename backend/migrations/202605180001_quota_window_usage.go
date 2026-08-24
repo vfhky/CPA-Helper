@@ -13,6 +13,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upQuotaWindowUsage, nil)
+	registerThisGoMigration()
 }
 
 var migrationUsageEmailPattern = regexp.MustCompile(`(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}`)

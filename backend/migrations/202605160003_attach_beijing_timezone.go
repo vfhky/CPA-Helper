@@ -11,6 +11,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upAttachBeijingTimezone, nil)
+	registerThisGoMigration()
 }
 
 type timezoneColumnGroup struct {

@@ -12,6 +12,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upClaudeCacheTokensPrices, nil)
+	registerThisGoMigration()
 }
 
 func upClaudeCacheTokensPrices(ctx context.Context, db *sql.DB) (err error) {

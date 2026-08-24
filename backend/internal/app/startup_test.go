@@ -36,16 +36,16 @@ func TestMigrateMakesStartupCheckReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Migrate failed: %v", err)
 	}
-	if report.CurrentVersion != backendMigrations.LatestVersion {
-		t.Fatalf("migration version = %d, want %d", report.CurrentVersion, backendMigrations.LatestVersion)
+	if report.CurrentVersion != backendMigrations.LatestVersion() {
+		t.Fatalf("migration version = %d, want %d", report.CurrentVersion, backendMigrations.LatestVersion())
 	}
 
 	check, err := CheckStartup(context.Background())
 	if err != nil {
 		t.Fatalf("CheckStartup failed after migration: %v", err)
 	}
-	if check.CurrentVersion != backendMigrations.LatestVersion {
-		t.Fatalf("startup version = %d, want %d", check.CurrentVersion, backendMigrations.LatestVersion)
+	if check.CurrentVersion != backendMigrations.LatestVersion() {
+		t.Fatalf("startup version = %d, want %d", check.CurrentVersion, backendMigrations.LatestVersion())
 	}
 }
 

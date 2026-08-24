@@ -9,6 +9,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upLiteLLMProxySettings, nil)
+	registerThisGoMigration()
 }
 
 func upLiteLLMProxySettings(ctx context.Context, db *sql.DB) (err error) {

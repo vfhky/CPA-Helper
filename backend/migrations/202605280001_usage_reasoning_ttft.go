@@ -12,6 +12,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upUsageReasoningTTFT, nil)
+	registerThisGoMigration()
 }
 
 func upUsageReasoningTTFT(ctx context.Context, db *sql.DB) (err error) {

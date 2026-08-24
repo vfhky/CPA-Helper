@@ -10,6 +10,7 @@ import (
 
 func init() {
 	goose.AddMigrationNoTxContext(upUsageTokenBreakdownBackfill, nil)
+	registerThisGoMigration()
 }
 
 func upUsageTokenBreakdownBackfill(ctx context.Context, db *sql.DB) (err error) {

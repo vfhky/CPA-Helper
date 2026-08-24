@@ -104,8 +104,8 @@ func TestRunMigrationsCreatesGooseVersionAndFinalSchema(t *testing.T) {
 	if err := app.db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version`).Scan(&version); err != nil {
 		t.Fatalf("query goose version: %v", err)
 	}
-	if version != backendMigrations.LatestVersion {
-		t.Fatalf("goose version = %d, want %d", version, backendMigrations.LatestVersion)
+	if version != backendMigrations.LatestVersion() {
+		t.Fatalf("goose version = %d, want %d", version, backendMigrations.LatestVersion())
 	}
 
 	var settingsCount int
@@ -378,8 +378,8 @@ func TestRunMigrationsBackfillsUsageTokenBreakdownZeros(t *testing.T) {
 	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != backendMigrations.LatestVersion {
-		t.Fatalf("goose version = %d, want %d", version, backendMigrations.LatestVersion)
+	if version != backendMigrations.LatestVersion() {
+		t.Fatalf("goose version = %d, want %d", version, backendMigrations.LatestVersion())
 	}
 }
 
