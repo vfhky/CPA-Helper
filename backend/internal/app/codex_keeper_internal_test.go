@@ -366,6 +366,72 @@ func TestKeeperQuotaWindowUsageAttributionPrefersSourceAccount(t *testing.T) {
 	}
 }
 
+func TestKeeperQuotaWindowUsageAttributionUsesAuthIndexWhenSourceAccountIsShared(t *testing.T) {
+	t.Setenv("CPA_HELPER_DATA_DIR", t.TempDir())
+	app, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer app.Close()
+
+	now := time.Date(2026, 5, 18, 12, 30, 0, 0, appTimeLocation)
+	resetAt := now.Add(time.Hour)
+	windowSeconds := keeperFiveHourWindowSeconds
+	accounts := []keeperAccount{
+		{
+			Name:                 "shared-one.json",
+			Email:                stringPtr("shared@example.com"),
+			AuthIndex:            stringPtr("auth-one"),
+			AccountType:          stringPtr("k12"),
+			PrimaryResetAt:       timePtrValue(resetAt),
+			PrimaryWindowSeconds: intPtrValue(windowSeconds),
+		},
+		{
+			Name:                 "shared-two.json",
+			Email:                stringPtr("shared@example.com"),
+			AuthIndex:            stringPtr("auth-two"),
+			AccountType:          stringPtr("k12"),
+			PrimaryResetAt:       timePtrValue(resetAt),
+			PrimaryWindowSeconds: intPtrValue(windowSeconds),
+		},
+	}
+	insertKeeperWindowUsageRecord(t, app, keeperWindowUsageSeed{
+		Dedupe:       "shared-one",
+		Timestamp:    now.Add(-10 * time.Minute),
+		Source:       "shared@example.com",
+		AuthIndex:    "auth-one",
+		InputTokens:  11,
+		OutputTokens: 7,
+		RawJSON:      `{"source":"shared@example.com","auth_index":"auth-one"}`,
+	})
+	insertKeeperWindowUsageRecord(t, app, keeperWindowUsageSeed{
+		Dedupe:       "shared-two",
+		Timestamp:    now.Add(-5 * time.Minute),
+		Source:       "shared@example.com",
+		AuthIndex:    "auth-two",
+		InputTokens:  13,
+		OutputTokens: 9,
+		RawJSON:      `{"source":"shared@example.com","auth_index":"auth-two"}`,
+	})
+
+	usages, err := app.computeKeeperQuotaWindowUsages(context.Background(), accounts, now)
+	if err != nil {
+		t.Fatalf("compute window usages: %v", err)
+	}
+	if got := usages["shared-one.json"].Primary.Records; got != 1 {
+		t.Fatalf("shared-one records = %d, want 1", got)
+	}
+	if got := usages["shared-one.json"].Primary.TotalTokens; got != 18 {
+		t.Fatalf("shared-one tokens = %d, want 18", got)
+	}
+	if got := usages["shared-two.json"].Primary.Records; got != 1 {
+		t.Fatalf("shared-two records = %d, want 1", got)
+	}
+	if got := usages["shared-two.json"].Primary.TotalTokens; got != 22 {
+		t.Fatalf("shared-two tokens = %d, want 22", got)
+	}
+}
+
 func TestAccountTypeFromKeeperDetailNormalizesCodexProPlans(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -392,6 +458,16 @@ func TestAccountTypeFromKeeperDetailNormalizesCodexProPlans(t *testing.T) {
 			name:   "nested id token plan is used",
 			detail: map[string]any{"id_token": map[string]any{"plan_type": "pro_lite"}},
 			want:   "pro_5x",
+		},
+		{
+			name:  "usage k12 is k12",
+			usage: &keeperUsageInfo{PlanType: "k12"},
+			want:  "k12",
+		},
+		{
+			name:   "nested id token k12 is used",
+			detail: map[string]any{"id_token": map[string]any{"plan_type": "k12"}},
+			want:   "k12",
 		},
 		{
 			name:   "attributes plan is used",
@@ -429,23 +505,87 @@ func TestAccountTypeFromKeeperDetailNormalizesCodexProPlans(t *testing.T) {
 			want:   "plus",
 		},
 		{
-			name:   "unknown stays nil",
+			name:   "unknown becomes unknown",
 			detail: map[string]any{"name": "codex-user@example.com.json"},
+			want:   "unknown",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := accountTypeFromKeeperDetail(tt.detail, tt.usage)
-			if tt.want == "" {
-				if got != nil {
-					t.Fatalf("accountTypeFromKeeperDetail() = %q, want nil", *got)
-				}
-				return
-			}
 			if got == nil || *got != tt.want {
 				t.Fatalf("accountTypeFromKeeperDetail() = %v, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultKeeperPriorityRulesIncludeK12AndUnknown(t *testing.T) {
+	rules := normalizePriorityRules(nil)
+	if rules["k12"] != 2 {
+		t.Fatalf("k12 priority = %d, want 2", rules["k12"])
+	}
+	if rules["unknown"] != 1 {
+		t.Fatalf("unknown priority = %d, want 1", rules["unknown"])
+	}
+}
+
+func TestKeeperRunStoresRemoteAuthIndex(t *testing.T) {
+	t.Setenv("CPA_HELPER_DATA_DIR", t.TempDir())
+
+	cpa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"files": []map[string]any{{"name": "stored.json", "type": "codex", "auth_index": "stored-auth"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files/download":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":         "stored.json",
+				"type":         "codex",
+				"email":        "stored@example.com",
+				"auth_index":   "stored-auth",
+				"account_type": "free",
+				"disabled":     false,
+				"priority":     0,
+				"access_token": "test-token",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 200,
+				"body": map[string]any{
+					"plan_type": "free",
+					"rate_limit": map[string]any{
+						"primary_window": map[string]any{
+							"used_percent":        10,
+							"reset_after_seconds": 3600,
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cpa.Close()
+
+	app, err := New()
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer app.Close()
+	configureKeeperTestCPA(t, app, cpa.URL, nil)
+
+	if _, _, err := app.executeKeeperRunForAccounts(context.Background(), "manual", []string{"stored.json"}, func(string) {}); err != nil {
+		t.Fatalf("keeper run: %v", err)
+	}
+	state, err := app.getKeeperState(context.Background(), "stored.json")
+	if err != nil {
+		t.Fatalf("get keeper state: %v", err)
+	}
+	if state.AuthIndex == nil || *state.AuthIndex != "stored-auth" {
+		t.Fatalf("auth_index = %v, want stored-auth", state.AuthIndex)
 	}
 }
 
@@ -492,6 +632,19 @@ func TestKeeperQuotaWindowUsageInfersAccountWindows(t *testing.T) {
 	}
 	if plusPair.Secondary == nil || plusPair.Secondary.WindowSeconds != keeperWeekWindowSeconds {
 		t.Fatalf("plus secondary window = %#v, want inferred weekly", plusPair.Secondary)
+	}
+
+	k12Pair := keeperQuotaWindowPairForAccount(keeperAccount{
+		Name:             "k12.json",
+		AccountType:      stringPtr("k12"),
+		PrimaryResetAt:   timePtrValue(resetAt),
+		SecondaryResetAt: timePtrValue(resetAt.Add(2 * time.Hour)),
+	}, now)
+	if k12Pair.Primary == nil || k12Pair.Primary.WindowSeconds != keeperFiveHourWindowSeconds {
+		t.Fatalf("k12 primary window = %#v, want inferred 5h", k12Pair.Primary)
+	}
+	if k12Pair.Secondary == nil || k12Pair.Secondary.WindowSeconds != keeperWeekWindowSeconds {
+		t.Fatalf("k12 secondary window = %#v, want inferred weekly", k12Pair.Secondary)
 	}
 
 	usage := parseKeeperUsageInfo(map[string]any{

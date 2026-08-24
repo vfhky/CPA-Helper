@@ -192,7 +192,7 @@ const quotaSortOptions = computed(() => [
 const accountTypeOptions = computed(() =>
   [...new Set(accounts.value.map((item) => item.account_type).filter(Boolean))]
     .sort((a, b) => String(a).localeCompare(String(b)))
-    .map((value) => ({ label: String(value), value: String(value) })),
+    .map((value) => ({ label: accountTypeLabel(String(value)), value: String(value) })),
 )
 
 const filteredAccounts = computed(() =>
@@ -818,9 +818,20 @@ function defaultPriority(account: CodexKeeperAccount): number | null {
   return priorityRuleMap.value[account.account_type] ?? null
 }
 
+function accountTypeLabel(accountType: string | null): string {
+  const normalized = accountType?.trim().toLowerCase()
+  if (!normalized || normalized === 'unknown') {
+    return t('未知', 'Unknown')
+  }
+  if (normalized === 'k12') {
+    return 'K12'
+  }
+  return accountType ?? normalized
+}
+
 function isPaidQuotaWindowAccount(accountType: string | null): boolean {
   const normalized = accountType?.trim().toLowerCase()
-  return normalized === 'plus' || normalized === 'team' || normalized?.startsWith('pro') === true
+  return normalized === 'plus' || normalized === 'team' || normalized === 'k12' || normalized?.startsWith('pro') === true
 }
 
 function isFreeQuotaWindowAccount(accountType: string | null): boolean {
@@ -1146,7 +1157,7 @@ function renderAccountIdentityCell(account: CodexKeeperAccount) {
 }
 
 function renderAccountTypeCell(account: CodexKeeperAccount) {
-  const typeLabel = account.account_type ?? t('未知', 'Unknown')
+  const typeLabel = accountTypeLabel(account.account_type)
   return h(
     'span',
     { class: ['account-table-chip', 'is-type'], title: typeLabel },
@@ -2237,7 +2248,7 @@ onBeforeUnmount(() => {
               <div class="account-card-meta-grid">
                 <div class="account-card-meta-item">
                   <span>{{ t('类型', 'Type') }}</span>
-                  <strong>{{ account.account_type ?? t('未知', 'Unknown') }}</strong>
+                  <strong>{{ accountTypeLabel(account.account_type) }}</strong>
                 </div>
                 <div class="account-card-meta-item">
                   <span>{{ t('优先级', 'Priority') }}</span>
@@ -2372,7 +2383,7 @@ onBeforeUnmount(() => {
           <NDescriptionsItem :label="t('账号', 'Account')">{{ selectedAccount.name }}</NDescriptionsItem>
           <NDescriptionsItem :label="t('邮箱', 'Email')">{{ selectedAccount.email ?? '-' }}</NDescriptionsItem>
           <NDescriptionsItem :label="t('账号类型', 'Account Type')">
-            {{ selectedAccount.account_type ?? t('未知', 'Unknown') }}
+            {{ accountTypeLabel(selectedAccount.account_type) }}
           </NDescriptionsItem>
           <NDescriptionsItem :label="t('启用状态', 'Enabled Status')">
             {{ selectedAccount.disabled ? t('已禁用', 'Disabled') : t('启用中', 'Enabled') }}
